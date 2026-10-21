@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Stockzoeker</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+
+<script>
+/* ======================================================================
+   CONFIGURATIE – alle instelbare waarden staan hier samen.
+   Stockzoeker leest alleen. Ze schrijft nooit iets in de Sheet en deelt
+   geen code, sleutel of opslag met Palletscan.
+   ====================================================================== */
+var CONFIG = {
+  APP_VERSION: "1.0.1",
+
+  /* --- Gegevens ophalen --------------------------------------------- */
+  // Web-app-adres van het Stockzoeker-Apps Script in de stock-Sheet (eindigt op /exec).
+  // Dit is een ANDER script en een ANDER adres dan dat van Palletscan.
+  ENDPOINT_URL: "",
+  // Leessleutel, gelijk aan READ_KEY in apps-script/Code.gs.
+  // LEEG LATEN als deze pagina in een publieke GitHub-repo staat: vul de
+  // sleutel dan per toestel in via het tandwiel (⚙).
+  READ_KEY: "",
+  REFRESH_MINUTES: 10,       // zo vaak worden de gegevens vanzelf opnieuw opgehaald (terwijl de app open staat)
+  STALE_MINUTES: 60,         // ouder dan dit: het tijdstip bovenaan wordt oranje
+  FETCH_TIMEOUT_MS: 30000,
+  RETRY_MIN_MS: 5000,        // eerste wachttijd na een mislukte poging
+  RETRY_MAX_MS: 60000,       // langste wachttijd tussen twee pogingen
+
+  /* --- Zoeken --------------------------------------------------------- */
+  // Korte palletcode in een gescande SSCC: cijfers 14 tot 17 (154199802502004042 -> 0404). Zelfde als Palletscan.
+  SHORT_CODE_FROM: 14,
+  SHORT_CODE_LEN: 4,
+  MAX_ROWS: 300,             // meer treffers dan dit worden niet getoond; typ dan verder
+  MIN_CHARS: 2,              // vanaf zoveel tekens wordt op naam gezocht (cijfers: altijd)
+
+  /* --- Toetsen -------------------------------------------------------- */
+  // Zelfde werking als in Palletscan: elke waarde wordt vergeleken met key, code en keyCode (zie ⚙ > Toetstest).
+  KEYS_VERVERS: ["F1"],
+  KEYS_WIS: ["F8"],          // Esc niet: Android geeft Esc door als "Terug" en sluit dan de app
+
+  /* --- Gedrag --------------------------------------------------------- */
+  // "none": geen schermtoetsenbord; de toetsen van het toestel en de scanner
+  // worden op paginaniveau opgevangen (Keyence met Transmission type = KeyEvent).
+  // "text": het invoerveld houdt een actief toetsenbord; voor een smartphone.
+  // De ⌨-knop wisselt tijdelijk.
+  INPUT_MODE: "none"
+};
+</script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: Roboto, "Segoe UI", system-ui, sans-serif; font-weight: 700;
+    background: #000; color: #fff;
+    display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+  mark { background: #ffd500; color: #000; border-radius: 2px; padding: 0 1px; }
+
+  /* Bovenbalk: naam + versheid van de gegevens */
+  #top { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; background: #1a1a1a; }
+  #state { flex: 1 1 auto; min-width: 0; font-size: clamp(14px, 4.4vw, 30px); font-weight: 900; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fresh { flex: 0 0 auto; font-size: clamp(15px, 4.8vw, 30px); font-weight: 900; padding: 1px 10px; border-radius: 6px; background: #0a8f2e; color: #fff; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #fresh.stale { background: #ff9800; color: #000; }
+  #fresh.none { background: #d00000; color: #fff; }
+  #net { flex: 0 0 auto; font-size: clamp(12px, 3.8vw, 20px); font-weight: 500; padding: 2px 8px; background: #1a1a1a; color: #bdbdbd; border-bottom: 2px solid #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #net.bad { background: #ff9800; color: #000; font-weight: 700; }
+
+  /* Invoerregel */
+  #f { flex: 0 0 auto; display: flex; background: #000; border-bottom: 2px solid #444; }
+  #in { flex: 1 1 auto; min-width: 0; font: inherit; font-size: clamp(20px, 6.5vw, 36px); padding: 6px 8px; background: #000; color: #fff; border: 0; outline: 0; caret-color: #ffd500; border-radius: 0; }
+  #in::placeholder { color: #8a8a8a; font-weight: 500; }
+  #kbd { flex: 0 0 auto; font-size: clamp(18px, 6vw, 34px); padding: 0 12px; background: #333; }
+  #kbd.on { background: #ffd500; color: #000; }
+
+  /* Resultaten */
+  #main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 0 8px; }
+  #empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; padding: 8px; }
+  #empty .big { font-size: min(13vw, 13vh, 110px); font-weight: 900; line-height: 1.05; }
+  #empty .sub { font-size: clamp(14px, 4.6vw, 30px); font-weight: 500; margin-top: 8px; color: #bdbdbd; }
+  #empty .sub b { color: #fff; }
+  #none { padding: 24px 12px; text-align: center; font-size: clamp(18px, 6vw, 36px); font-weight: 900; color: #bdbdbd; }
+  #none small { display: block; font-size: clamp(13px, 4vw, 22px); font-weight: 500; margin-top: 6px; }
+
+  .sec { border-top: 2px solid #444; }
+  .sec:first-child { border-top: 0; }
+  .sechead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 8px 2px; font-size: clamp(13px, 4vw, 22px); font-weight: 900; color: #bdbdbd; letter-spacing: .04em; text-transform: uppercase; }
+  .sechead .n { font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+  /* Pallet gevonden: nummer en plaats groot */
+  .palhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; background: #ffd500; color: #000; }
+  .palhead .lbl { font-size: clamp(13px, 4vw, 22px); font-weight: 700; }
+  .palhead .pal { font-size: clamp(34px, 12vw, 80px); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+  .palhead .loc { font-size: clamp(30px, 11vw, 72px); font-weight: 900; line-height: 1; text-align: right; }
+  .palhead .loc.none { font-size: clamp(16px, 5vw, 32px); }
+
+  /* Klantgroep */
+  .klant { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 8px 2px; font-size: clamp(16px, 5vw, 28px); font-weight: 900; color: #ffd500; }
+  .klant .n { color: #bdbdbd; font-weight: 500; font-size: clamp(12px, 3.6vw, 20px); }
+
+  /* Eén regel = één product op één pallet */
+  .row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; padding: 5px 8px; border-top: 1px solid #222; align-items: start; }
+  .row.noloc { grid-template-columns: minmax(0, 1fr); }
+  .row .loc { grid-row: 1 / 3; align-self: center; min-width: 3.3em; text-align: center; padding: 4px 6px; border-radius: 6px; background: #fff; color: #000; font-size: clamp(18px, 6vw, 34px); font-weight: 900; line-height: 1; }
+  .row .loc.rack { background: #ffd500; }
+  .row .loc.none { background: #333; color: #bdbdbd; font-size: clamp(11px, 3.3vw, 18px); font-weight: 700; line-height: 1.1; }
+  .row .loc.status { background: #fff; font-size: clamp(13px, 4vw, 22px); }
+  .row .prod { font-size: clamp(16px, 4.8vw, 26px); font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+  .row .prod .k { color: #bdbdbd; font-weight: 500; }
+  .row .meta { display: flex; flex-wrap: wrap; gap: 0 10px; font-size: clamp(12px, 3.7vw, 20px); font-weight: 500; color: #bdbdbd; font-variant-numeric: tabular-nums; }
+  .row .meta .qty { color: #fff; font-weight: 700; }
+  .more { padding: 10px 8px; color: #ff9800; font-weight: 700; font-size: clamp(13px, 4vw, 22px); }
+
+  /* Actieknoppen */
+  #actions { flex: 0 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #000; border-top: 2px solid #444; }
+  #actions button { min-height: clamp(44px, 13vw, 76px); border-radius: 8px; background: #fff; color: #000; font-size: clamp(13px, 4.2vw, 28px); font-weight: 900; line-height: 1.05; padding: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #actions button .k { display: block; font-size: clamp(17px, 5.5vw, 36px); }
+  #actions button:active { background: #ffd500; }
+  #actions #bWis { background: #bdbdbd; }
+
+  /* Voet */
+  #foot { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px; background: #1a1a1a; color: #bdbdbd; font-size: clamp(12px, 3.6vw, 18px); font-weight: 500; }
+  #gear { font-size: clamp(22px, 7vw, 34px); padding: 0 8px; background: transparent; color: #fff; line-height: 1.2; }
+
+  /* Liggend toestel: knoppen klein */
+  @media (orientation: landscape) and (max-height: 500px) {
+    #actions button { min-height: 36px; font-size: clamp(10px, 2vw, 18px); }
+    #actions button .k { display: inline; font-size: inherit; margin-right: 4px; }
+    #empty .big { font-size: min(8vw, 24vh); }
+  }
+
+  /* Instellingen */
+  #dlg { position: fixed; inset: 0; background: #fff; color: #000; overflow: auto; padding: 10px 12px 24px; font-weight: 500; font-size: 16px; -webkit-user-select: text; user-select: text; z-index: 10; }
+  #dlg[hidden] { display: none; }
+  #dlg h2 { font-size: 22px; font-weight: 900; margin-bottom: 8px; }
+  #dlg h3 { font-size: 16px; font-weight: 900; margin: 16px 0 4px; }
+  #dlg label { display: block; font-weight: 700; margin-top: 10px; }
+  #dlg input[type=text], #dlg input[type=number] { width: 100%; font: inherit; font-size: 18px; padding: 8px; border: 2px solid #000; border-radius: 6px; background: #fff; color: #000; }
+  #dlg small { display: block; color: #444; margin-top: 2px; }
+  #dlg .row2 { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #dlg .row2 button { flex: 1 1 120px; min-height: 48px; border-radius: 8px; background: #000; color: #fff; font-weight: 900; font-size: 17px; padding: 4px 8px; }
+  #dlg .row2 button.sec { background: #e0e0e0; color: #000; }
+  #dlgmsg { margin-top: 10px; font-weight: 900; min-height: 1.3em; }
+  #dlgmsg.ok { color: #0a7a26; } #dlgmsg.bad { color: #c00000; }
+  #keytest { font-family: monospace; font-size: 15px; background: #eee; padding: 6px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <div id="state">STOCKZOEKER</div>
+  <div id="fresh" title="Tijdstip waarop de gegevens opgehaald zijn">—</div>
+</div>
+<div id="net">…</div>
+
+<form id="f" autocomplete="off">
+  <input id="in" type="text" inputmode="none" enterkeyhint="search" maxlength="80"
+         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+         placeholder="klant, product of palletcode" aria-label="Zoeken">
+  <button type="button" id="kbd" aria-label="Schermtoetsenbord aan/uit">⌨</button>
+</form>
+
+<div id="main">
+  <div id="empty">
+    <div class="big">ZOEK</div>
+    <div class="sub">Typ een <b>klant</b> of <b>product</b>,<br>een <b>palletcode</b> (4 cijfers),<br>of scan een palletlabel.</div>
+  </div>
+</div>
+
+<div id="actions">
+  <button type="button" id="bVervers"><span class="k">F1</span>Ververs</button>
+  <button type="button" id="bWis"><span class="k">F8</span>Wis</button>
+</div>
+
+<div id="foot">
+  <span id="footinfo"></span>
+  <button type="button" id="gear" aria-label="Instellingen">⚙</button>
+</div>
+
+<div id="dlg" hidden>
+  <h2>Instellingen van dit toestel</h2>
+
+  <label for="sKey">Leessleutel</label>
+  <input type="text" id="sKey" maxlength="100" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <small id="sKeyHelp"></small>
+
+  <label for="sUrl">Adres van het Stockzoeker-Apps Script</label>
+  <input type="text" id="sUrl" maxlength="300" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <small id="sUrlHelp"></small>
+
+  <label for="sMin">Vanzelf verversen, elke … minuten</label>
+  <input type="number" id="sMin" min="1" max="1440" step="1">
+  <small>Alleen terwijl de app open staat en er verbinding is. Met F1 of de knop Ververs kan het altijd meteen.</small>
+
+  <div class="row2">
+    <button type="button" id="sSave">Bewaren</button>
+    <button type="button" id="sTest" class="sec">Test verbinding</button>
+    <button type="button" id="sClose" class="sec">Sluiten</button>
+  </div>
+  <div id="dlgmsg"></div>
+
+  <h3>Gegevens op dit toestel</h3>
+  <div id="sData"></div>
+  <div class="row2">
+    <button type="button" id="sFetch" class="sec">Nu ophalen</button>
+    <button type="button" id="sClear" class="sec">Gegevens wissen</button>
+  </div>
+
+  <h3>Toetstest</h3>
+  <div id="keytest">Druk op een toets (bv. F1)…</div>
+  <small>Zet de waarde achter <b>key</b> of <b>code</b> in het configuratieblok bovenaan index.html.</small>
+</div>
+
+<script src="zoeklogic.js"></script>
+<script>
+(function () {
+  'use strict';
+  var L = window.ZoekLogic;
+  var $ = function (id) { return document.getElementById(id); };
+  var SHORT = { shortCodeFrom: CONFIG.SHORT_CODE_FROM, shortCodeLen: CONFIG.SHORT_CODE_LEN };
+
+  /* ------------------------------------------------------------------
+     Instellingen van dit toestel: localStorage. Eigen sleutelnaam, los van Palletscan.
+     ------------------------------------------------------------------ */
+  var SET_KEY = 'stockzoeker.settings', DATA_KEY = 'stockzoeker.data';
+  var settings = {};
+  try { settings = JSON.parse(localStorage.getItem(SET_KEY) || '{}'); } catch (e) { settings = {}; }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) settings = {};
+  function saveSettings() { try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); return true; } catch (e) { return false; } }
+  function endpoint() { return (settings.url || CONFIG.ENDPOINT_URL || '').trim(); }
+  function readKey() { return (settings.key || CONFIG.READ_KEY || '').trim(); }
+  function refreshMs() { var m = Number(settings.min) || CONFIG.REFRESH_MINUTES; return Math.max(1, m) * 60000; }
+
+  /* ------------------------------------------------------------------
+     De stocklijst op het toestel. Eén geheel: ruwe rijen + tijdstip van ophalen.
+     Zoeken gebeurt altijd lokaal, ook zonder verbinding.
+     ------------------------------------------------------------------ */
+  var data = { fetchedAt: 0, rows: [] };   // rows = ruwe rijen van het script
+  var ROWS = [];                            // klaargemaakt voor het zoeken
+  var storageOk = true;
+  (function loadData() {
+    try {
+      var d = JSON.parse(localStorage.getItem(DATA_KEY) || 'null');
+      if (d && typeof d.fetchedAt === 'number' && Array.isArray(d.rows)) data = d;
+    } catch (e) { data = { fetchedAt: 0, rows: [] }; }
+    ROWS = L.prepare(data.rows);
+  })();
+  function storeData(rows, at) {
+    data = { fetchedAt: at, rows: rows };
+    ROWS = L.prepare(rows);
+    try { localStorage.setItem(DATA_KEY, JSON.stringify(data)); storageOk = true; }
+    catch (e) { storageOk = false; }
+  }
+  function clearData() {
+    data = { fetchedAt: 0, rows: [] }; ROWS = [];
+    try { localStorage.removeItem(DATA_KEY); } catch (e) {}
+  }
+
+  /* ------------------------------------------------------------------
+     Scherm
+     ------------------------------------------------------------------ */
+  var inp = $('in'), dlgOpen = false;
+
+  function timeText(ts) {
+    try { return new Date(ts).toLocaleTimeString('nl-BE', { timeZone: 'Europe/Brussels', hour: '2-digit', minute: '2-digit', hour12: false }); }
+    catch (e) { return new Date(ts).toTimeString().slice(0, 5); }
+  }
+  function dateTimeText(ts) {
+    try { return new Date(ts).toLocaleString('nl-BE', { timeZone: 'Europe/Brussels', hour12: false }); }
+    catch (e) { return new Date(ts).toString(); }
+  }
+  // "09:12" vandaag, anders "gisteren 16:40" of "18/10 16:40".
+  function freshText(ts) {
+    if (!ts) return 'GEEN DATA';
+    var d = new Date(ts), now = new Date();
+    var sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) return timeText(ts);
+    var y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'gisteren ' + timeText(ts);
+    return d.getDate() + '/' + (d.getMonth() + 1) + ' ' + timeText(ts);
+  }
+  function keyLabel(list, fallback) { var k = (list && list[0]) || fallback; return k === 'Escape' ? 'Esc' : String(k); }
+
+  function renderTop() {
+    var fr = $('fresh');
+    fr.textContent = freshText(data.fetchedAt);
+    fr.className = !data.fetchedAt ? 'none' : (L.isStale(data.fetchedAt, Date.now(), CONFIG.STALE_MINUTES * 60000) ? 'stale' : '');
+    $('footinfo').textContent = 'v' + CONFIG.APP_VERSION + ' · ' + ROWS.length + ' regels';
+    renderNet();
+  }
+
+  // Tekst met de zoekwoorden gemarkeerd. Vergelijking per teken, zodat "Délices"
+  // ook bij "delices" gemarkeerd wordt. Lukt dat niet, dan gewone tekst.
+  function foldChars(s) {
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i], f;
+      try { f = c.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) { f = c; }
+      f = f.toLowerCase().replace(/[´`’]/g, "'");
+      out += f.length === 1 ? f : c.toLowerCase();
+    }
+    return out;
+  }
+  function highlight(el, text, terms) {
+    text = String(text || '');
+    if (!terms || !terms.length) { el.textContent = text; return; }
+    var folded = foldChars(text);
+    if (folded.length !== text.length) { el.textContent = text; return; }
+    var marks = [];
+    terms.forEach(function (t) {
+      if (!t) return;
+      var from = 0, at;
+      while ((at = folded.indexOf(t, from)) >= 0) { marks.push([at, at + t.length]); from = at + t.length; }
+    });
+    if (!marks.length) { el.textContent = text; return; }
+    marks.sort(function (a, b) { return a[0] - b[0]; });
+    var pos = 0;
+    marks.forEach(function (m) {
+      if (m[0] < pos) { if (m[1] > pos) m[0] = pos; else return; }
+      if (m[0] > pos) el.appendChild(document.createTextNode(text.slice(pos, m[0])));
+      var mk = document.createElement('mark'); mk.textContent = text.slice(m[0], m[1]); el.appendChild(mk);
+      pos = m[1];
+    });
+    if (pos < text.length) el.appendChild(document.createTextNode(text.slice(pos)));
+  }
+
+  function locClass(loc) {
+    var r = L.locRank(loc);
+    return 'loc ' + (r === 0 ? 'rack' : r === 1 ? 'status' : 'none');
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  // Eén regel: plaats links, product en klant rechts, daaronder hoeveelheid, pallet en datum.
+  function rowEl(r, terms, opts) {
+    opts = opts || {};
+    var d = el('div', 'row' + (opts.hideLoc ? ' noloc' : ''));
+    if (!opts.hideLoc) d.appendChild(el('div', locClass(r.locatie), r.locatie));
+    var prod = el('div', 'prod');
+    highlight(prod, r.product || '(geen productnaam)', terms);
+    if (!opts.hideKlant) {
+      var k = el('span', 'k', ' · ');
+      var kn = document.createElement('span');
+      if (r.klant === '?') kn.textContent = 'klant onbekend'; else highlight(kn, r.klant, terms);
+      k.appendChild(kn);
+      prod.appendChild(k);
+    }
+    d.appendChild(prod);
+    var meta = el('div', 'meta');
+    meta.appendChild(el('span', 'qty', L.qtyText(r)));
+    if (!opts.hidePal) meta.appendChild(el('span', '', r.pal ? 'pallet ' + L.padPal(r.pal) : 'geen pallet'));
+    if (r.datum) meta.appendChild(el('span', '', 'opgemeten ' + r.datum));
+    d.appendChild(meta);
+    return d;
+  }
+
+  var lastQuery = null;
+  function renderResults() {
+    var raw = inp.value;
+    var main = $('main');
+    var q = L.classify(raw, SHORT);
+    // Bij tekst pas zoeken vanaf MIN_CHARS tekens (één letter geeft bijna alles).
+    if (q.kind === 'text' && raw.trim().length < CONFIG.MIN_CHARS) q = { kind: 'empty', terms: [] };
+    var key = JSON.stringify([q, data.fetchedAt]);
+    if (key === lastQuery) return;
+    lastQuery = key;
+
+    main.textContent = '';
+    main.scrollTop = 0;
+    $('state').textContent = 'STOCKZOEKER';
+
+    if (q.kind === 'empty') {
+      var em = el('div', ''); em.id = 'empty';
+      em.appendChild(el('div', 'big', 'ZOEK'));
+      var sub = el('div', 'sub');
+      if (!ROWS.length) { sub.textContent = data.fetchedAt ? 'De stocklijst is leeg.' : 'Nog geen gegevens op dit toestel. Druk op F1 (Ververs) met verbinding, of open ⚙.'; }
+      else {
+        sub.appendChild(document.createTextNode('Typ een ')); sub.appendChild(el('b', '', 'klant')); sub.appendChild(document.createTextNode(' of '));
+        sub.appendChild(el('b', '', 'product')); sub.appendChild(document.createElement('br'));
+        sub.appendChild(document.createTextNode('een ')); sub.appendChild(el('b', '', 'palletcode')); sub.appendChild(document.createTextNode(' (4 cijfers),'));
+        sub.appendChild(document.createElement('br')); sub.appendChild(document.createTextNode('of scan een palletlabel.'));
+      }
+      em.appendChild(sub); main.appendChild(em);
+      return;
+    }
+
+    var res = L.search(ROWS, raw, SHORT);
+    var shown = 0, budget = CONFIG.MAX_ROWS;
+
+    if (q.kind === 'sscc' || q.kind === 'digits') {
+      var sec = el('div', 'sec');
+      var head = el('div', 'palhead');
+      var left = el('div', '');
+      left.appendChild(el('div', 'lbl', q.kind === 'sscc' ? 'GESCANDE PALLET' : 'PALLET'));
+      left.appendChild(el('div', 'pal', L.padPal(q.pal)));
+      head.appendChild(left);
+      if (res.pallet.length) {
+        // Alle regels van de pallet op dezelfde plaats: die plaats groot. Anders staat ze per regel.
+        var locs = {}; res.pallet.forEach(function (r) { locs[r.locatie] = true; });
+        var keys = Object.keys(locs);
+        var locEl = el('div', 'loc' + (keys.length === 1 && L.locRank(keys[0]) === 2 ? ' none' : ''), keys.length === 1 ? keys[0] : keys.length + ' plaatsen');
+        head.appendChild(locEl);
+        sec.appendChild(head);
+        var sh = el('div', 'sechead'); sh.appendChild(el('span', '', 'Op deze pallet')); sh.appendChild(el('span', 'n', res.pallet.length + (res.pallet.length === 1 ? ' product' : ' producten'))); sec.appendChild(sh);
+        res.pallet.forEach(function (r) { sec.appendChild(rowEl(r, [], { hidePal: true, hideLoc: keys.length === 1 })); shown++; });
+        $('state').textContent = 'PALLET ' + L.padPal(q.pal) + ' · ' + (keys.length === 1 ? keys[0] : keys.length + ' plaatsen');
+      } else {
+        head.appendChild(el('div', 'loc none', q.kind === 'sscc' ? 'niet in de stocklijst' : 'geen pallet met dit nummer'));
+        sec.appendChild(head);
+      }
+      main.appendChild(sec);
+    }
+
+    if (q.kind === 'text' || q.kind === 'digits') {
+      var groups = L.groupByKlant(res.text);
+      if (res.text.length) {
+        var sec2 = el('div', 'sec');
+        var sh2 = el('div', 'sechead');
+        sh2.appendChild(el('span', '', q.kind === 'digits' ? 'Ook in namen' : 'Gevonden'));
+        sh2.appendChild(el('span', 'n', res.text.length + (res.text.length === 1 ? ' regel' : ' regels') + ' · ' + groups.length + (groups.length === 1 ? ' klant' : ' klanten')));
+        sec2.appendChild(sh2);
+        var cut = false;
+        groups.some(function (g) {
+          var kh = el('div', 'klant');
+          var kn = document.createElement('span'); highlight(kn, g.klant === '?' ? 'Klant onbekend' : g.klant, q.terms); kh.appendChild(kn);
+          kh.appendChild(el('span', 'n', g.rows.length + (g.rows.length === 1 ? ' regel' : ' regels')));
+          sec2.appendChild(kh);
+          return g.rows.some(function (r) {
+            if (shown >= budget) { cut = true; return true; }
+            sec2.appendChild(rowEl(r, q.terms, { hideKlant: true })); shown++;
+            return false;
+          });
+        });
+        if (cut) sec2.appendChild(el('div', 'more', '… nog ' + (res.text.length - shown + (res.pallet.length)) + ' regels niet getoond. Typ meer letters.'));
+        main.appendChild(sec2);
+        if (q.kind === 'text') $('state').textContent = res.text.length + ' REGELS · ' + groups.length + (groups.length === 1 ? ' KLANT' : ' KLANTEN');
+      } else if (q.kind === 'text') {
+        var none = el('div', ''); none.id = 'none';
+        none.appendChild(document.createTextNode('Niets gevonden'));
+        none.appendChild(el('small', '', ROWS.length ? 'Geen klant of product met "' + raw.trim() + '" erin.' : 'Er zijn nog geen gegevens op dit toestel.'));
+        main.appendChild(none);
+        $('state').textContent = 'NIETS GEVONDEN';
+      }
+    }
+  }
+
+  var renderTimer = null;
+  function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(renderResults, 40); }
+  function render() { lastQuery = null; renderTop(); renderResults(); }
+
+  /* ------------------------------------------------------------------
+     Gegevens ophalen: bij het openen, elke x minuten, bij F1, en zodra er
+     weer verbinding is als een poging mislukte.
+     ------------------------------------------------------------------ */
+  var loading = false, loadAgain = false, retryTimer = null, retryDelay = 0, wanted = false;
+  var net = { kind: 'idle', text: '' };
+  function setNet(kind, text) { net = { kind: kind, text: text || '' }; renderNet(); }
+  function renderNet() {
+    var e = $('net'), text, bad = false;
+    if (!endpoint() || !readKey()) { text = 'Niet ingesteld: open ⚙'; bad = true; }
+    else if (net.kind === 'loading') text = 'Gegevens ophalen…';
+    else if (net.kind === 'fail') { text = net.text; bad = true; } // het tijdstip van de gegevens staat rechtsboven
+    else if (!storageOk) { text = 'Gegevens niet bewaard op het toestel (opslag vol?)'; bad = true; }
+    else if (!data.fetchedAt) { text = 'Nog geen gegevens'; bad = true; }
+    else text = 'Gegevens van ' + freshText(data.fetchedAt) + ' · ' + ROWS.length + ' regels';
+    e.textContent = text; e.classList.toggle('bad', bad);
+  }
+
+  function postJson(url, body) {
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, CONFIG.FETCH_TIMEOUT_MS);
+    // text/plain vermijdt een CORS-preflight, die Apps Script niet beantwoordt.
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body),
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (r) { return r.text(); }).then(function (t) {
+      clearTimeout(timer);
+      try { return JSON.parse(t); } catch (e) { return { ok: false, error: 'badresponse' }; }
+    }, function (e) { clearTimeout(timer); throw e; });
+  }
+
+  var ERR_TEXT = {
+    unauthorized: 'Sleutel geweigerd: controleer ⚙',
+    badresponse: 'Server antwoordt fout: controleer adres en publicatie',
+    badsheet: 'Tabblad niet gevonden in de Sheet (zie Code.gs)',
+    badheader: 'Kopjes niet gevonden in de Sheet (zie Code.gs)',
+    badaction: 'App en script passen niet bij elkaar'
+  };
+  function errText(code) {
+    if (code === 'network') return navigator.onLine === false ? 'Geen verbinding: ververst zodra er wifi is' : 'Ophalen mislukt: nieuwe poging volgt';
+    return ERR_TEXT[code] || 'Serverfout: nieuwe poging volgt';
+  }
+
+  function fetchData(manual) {
+    if (loading) { loadAgain = true; return; }
+    clearTimeout(retryTimer); retryTimer = null;
+    var url = endpoint(), key = readKey();
+    if (!url || !key) { setNet('idle'); return; }
+    if (manual) wanted = true;
+    loading = true; setNet('loading');
+    postJson(url, { key: key, action: 'stock' }).then(function (res) {
+      if (res && res.ok && Array.isArray(res.rows)) {
+        storeData(res.rows, Date.now());
+        retryDelay = 0; wanted = false;
+        setNet('idle'); render();
+        return;
+      }
+      fail((res && res.error) || 'server');
+    }, function () { fail('network'); }).then(function () {
+      loading = false;
+      if (loadAgain) { loadAgain = false; fetchData(false); }
+    });
+  }
+  function fail(code) {
+    retryDelay = Math.min(retryDelay ? retryDelay * 2 : CONFIG.RETRY_MIN_MS, CONFIG.RETRY_MAX_MS);
+    setNet('fail', errText(code));
+    // Sleutel of adres fout: blijven proberen heeft geen zin; de gebruiker moet ⚙ openen.
+    if (code === 'unauthorized' || code === 'badaction') return;
+    retryTimer = setTimeout(function () { retryTimer = null; fetchData(false); }, retryDelay);
+  }
+  // Oud genoeg om opnieuw op te halen?
+  function maybeFetch() {
+    if (document.hidden || loading || retryTimer) return;
+    if (!data.fetchedAt || Date.now() - data.fetchedAt >= refreshMs() || wanted) fetchData(false);
+  }
+  window.addEventListener('online', function () { retryDelay = 0; clearTimeout(retryTimer); retryTimer = null; fetchData(false); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { renderTop(); maybeFetch(); keepFocus(); } });
+  setInterval(function () { renderTop(); maybeFetch(); }, 30000);
+
+  /* ------------------------------------------------------------------
+     Toetsen en scanner. De scanner werkt als toetsenbord: tekens + Enter.
+     Zonder schermtoetsenbord worden de toetsen op paginaniveau opgevangen.
+     ------------------------------------------------------------------ */
+  function keyMatches(e, list) {
+    if (!list) return false;
+    for (var i = 0; i < list.length; i++) {
+      var b = String(list[i]);
+      if (b === e.key || b === e.code || b === String(e.keyCode)) return true;
+    }
+    return false;
+  }
+  function clearSearch() { inp.value = ''; scheduleRender(); }
+
+  document.addEventListener('keydown', function (e) {
+    if (dlgOpen) {
+      $('keytest').textContent = 'key = "' + e.key + '"   code = "' + e.code + '"   keyCode = ' + e.keyCode;
+      if (e.key === 'Escape') { e.preventDefault(); closeDialog(); }
+      else if (/^F\d+$/.test(e.key)) e.preventDefault();
+      return;
+    }
+    if (keyMatches(e, CONFIG.KEYS_VERVERS)) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) fetchData(true); return; }
+    if (keyMatches(e, CONFIG.KEYS_WIS)) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) clearSearch(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); if (document.activeElement === inp && !manualKeyboard) inp.blur(); renderResults(); return; }
+    if (/^F\d+$/.test(e.key)) { e.preventDefault(); return; }
+
+    // Staat de focus niet in het invoerveld, dan het teken zelf toevoegen.
+    if (document.activeElement !== inp) {
+      if (e.key === 'Backspace') { inp.value = inp.value.slice(0, -1); e.preventDefault(); scheduleRender(); }
+      else if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { inp.value += e.key; e.preventDefault(); scheduleRender(); }
+    }
+  }, true);
+  inp.addEventListener('input', scheduleRender);
+  $('f').addEventListener('submit', function (e) { e.preventDefault(); renderResults(); });
+
+  var manualKeyboard = false;
+  function keepFocus() {
+    if (dlgOpen || !manualKeyboard) return;
+    if (document.activeElement !== inp) { try { inp.focus({ preventScroll: true }); } catch (e) { inp.focus(); } }
+  }
+  // De keuze van ⌨ wordt per toestel onthouden: een smartphone zonder fysiek
+  // toetsenbord zet hem één keer aan, de Keyence laat hem uit.
+  function setInputMode(text, remember) {
+    inp.setAttribute('inputmode', text ? 'text' : 'none');
+    $('kbd').classList.toggle('on', text);
+    manualKeyboard = text;
+    if (text) keepFocus(); else inp.blur();
+    if (remember) { settings.kbd = text ? 'text' : 'none'; saveSettings(); }
+  }
+  function bindButton(id, fn) {
+    var b = $(id);
+    b.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+    b.addEventListener('click', function (e) { e.preventDefault(); fn(); keepFocus(); });
+  }
+  setInputMode((settings.kbd || CONFIG.INPUT_MODE) === 'text', false);
+  bindButton('kbd', function () { setInputMode(inp.getAttribute('inputmode') === 'none', true); });
+  bindButton('bVervers', function () { fetchData(true); });
+  bindButton('bWis', clearSearch);
+  $('bVervers').firstChild.textContent = keyLabel(CONFIG.KEYS_VERVERS, 'F1');
+  $('bWis').firstChild.textContent = keyLabel(CONFIG.KEYS_WIS, 'F8');
+
+  /* ------------------------------------------------------------------
+     Instellingen per toestel
+     ------------------------------------------------------------------ */
+  function dlgMsg(text, cls) { $('dlgmsg').textContent = text; $('dlgmsg').className = cls || ''; }
+  function fillData() {
+    $('sData').textContent = data.fetchedAt
+      ? ROWS.length + ' regels, opgehaald op ' + dateTimeText(data.fetchedAt) + '.'
+      : 'Nog geen gegevens op dit toestel.';
+  }
+  function openDialog() {
+    dlgOpen = true;
+    inp.blur();
+    $('sKey').value = settings.key || '';
+    $('sUrl').value = settings.url || '';
+    $('sMin').value = settings.min || CONFIG.REFRESH_MINUTES;
+    $('sKeyHelp').textContent = CONFIG.READ_KEY ? 'Leeg laten om de sleutel uit index.html te gebruiken.' : 'Dezelfde sleutel als READ_KEY in Code.gs van de stock-Sheet. Typen of als barcode scannen.';
+    $('sUrlHelp').textContent = CONFIG.ENDPOINT_URL ? 'Leeg laten om het adres uit index.html te gebruiken.' : 'Eindigt op /exec. Niet het adres van Palletscan.';
+    dlgMsg(''); fillData();
+    $('dlg').hidden = false;
+  }
+  function closeDialog() { $('dlg').hidden = true; dlgOpen = false; render(); keepFocus(); maybeFetch(); }
+  function readDialog() {
+    settings.key = ($('sKey').value || '').trim();
+    settings.url = ($('sUrl').value || '').trim();
+    var m = parseInt($('sMin').value, 10);
+    settings.min = (m > 0 && m <= 1440) ? m : CONFIG.REFRESH_MINUTES;
+    $('sMin').value = settings.min;
+    return saveSettings();
+  }
+  $('gear').addEventListener('click', openDialog);
+  $('sClose').addEventListener('click', closeDialog);
+  $('sSave').addEventListener('click', function () {
+    if (readDialog()) { dlgMsg('Bewaard.', 'ok'); retryDelay = 0; } else dlgMsg('Bewaren mislukt.', 'bad');
+  });
+  $('sTest').addEventListener('click', function () {
+    if (!readDialog()) { dlgMsg('Bewaren mislukt.', 'bad'); return; }
+    if (!endpoint() || !readKey()) { dlgMsg('Vul eerst adres en sleutel in.', 'bad'); return; }
+    dlgMsg('Testen…');
+    postJson(endpoint(), { key: readKey(), ping: true }).then(function (res) {
+      if (res && res.ok) dlgMsg('Verbinding in orde.', 'ok');
+      else dlgMsg(ERR_TEXT[res && res.error] || 'Serverfout: ' + ((res && res.error) || 'onbekend'), 'bad');
+    }, function () { dlgMsg('Geen antwoord. Controleer de wifi, het adres, en of de web-app gepubliceerd is voor "Iedereen".', 'bad'); });
+  });
+  $('sFetch').addEventListener('click', function () {
+    if (!readDialog()) { dlgMsg('Bewaren mislukt.', 'bad'); return; }
+    if (!endpoint() || !readKey()) { dlgMsg('Vul eerst adres en sleutel in.', 'bad'); return; }
+    dlgMsg('Ophalen…');
+    postJson(endpoint(), { key: readKey(), action: 'stock' }).then(function (res) {
+      if (res && res.ok && Array.isArray(res.rows)) { storeData(res.rows, Date.now()); retryDelay = 0; wanted = false; fillData(); dlgMsg(ROWS.length + ' regels opgehaald.', 'ok'); }
+      else dlgMsg(ERR_TEXT[res && res.error] || 'Serverfout: ' + ((res && res.error) || 'onbekend'), 'bad');
+    }, function () { dlgMsg('Geen antwoord. Controleer de wifi en het adres.', 'bad'); });
+  });
+  $('sClear').addEventListener('click', function () { clearData(); fillData(); dlgMsg('Gegevens gewist. Druk op Nu ophalen of F1.', 'ok'); });
+
+  /* ------------------------------------------------------------------
+     Start
+     ------------------------------------------------------------------ */
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  }
+  render();
+  maybeFetch();
+})();
+</script>
+</body>
+</html>
