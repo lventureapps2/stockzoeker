@@ -22,7 +22,7 @@ Eén zoekveld. Wat je typt bepaalt wat er gebeurt:
 | **Gescand palletlabel** (SSCC, 18 cijfers) | Haalt de palletcode uit de cijfers 14 tot 17, zoals Palletscan, en toont die pallet. Geen naamtreffers. |
 | **Al de rest** (`bio`, `zusto uk`, `délices`) | Vrije tekst. Hoofdletters en accenten tellen niet mee. Elk woord moet ergens voorkomen in de klantnaam of de productnaam: `zusto uk` vindt "Zusto UK" maar niet "Zusto USA". De treffers staan per klant, gesorteerd op plaats; wat gevonden is, is geel gemarkeerd. Vanaf 2 tekens. |
 
-De plaats staat links in een vakje: geel voor een rekplaats (`A03`), wit voor een vaste bestemming (`Uitgenomen`, `TEE`, `Gang 1`), grijs voor **Geen locatie**. Binnen een klant staan de rekplaatsen eerst, dan de vaste bestemmingen, dan de pallets zonder locatie.
+De plaats staat links in een vakje: geel voor een rekplaats (`A03`), wit voor een vaste bestemming of magazijn (`Uitgenomen`, `TEE`, `Gang 1`), grijs voor **Geen locatie**. Een pallet met status Nieuw draagt het label **NIEUW**. Binnen een klant staan de rekplaatsen eerst, dan de vaste bestemmingen, dan de pallets zonder locatie.
 
 Toetsen: **F1** = Ververs, **F8** = Wis het zoekveld. Druk geen Esc: op de Keyence sluit Esc de app. De knoppen onderaan doen hetzelfde als de toetsen.
 
@@ -30,10 +30,10 @@ Toetsen: **F1** = Ververs, **F8** = Wis het zoekveld. Druk geen Esc: op de Keyen
 
 | Bestand | Waarvoor | Waar komt het |
 |---|---|---|
-| `index.html` | De app. Het configuratieblok staat bovenaan. | GitHub Pages, map `stockzoeker/` |
-| `zoeklogic.js` | Zoeken, sorteren, groeperen. Staat apart zodat de tests exact deze code testen. | GitHub Pages, map `stockzoeker/` |
-| `sw.js` | Bewaart de app op het toestel, zodat ze ook zonder wifi start. | GitHub Pages, map `stockzoeker/` |
-| `manifest.webmanifest`, `icon-192.png`, `icon-512.png` | Nodig om de app op het startscherm te zetten. | GitHub Pages, map `stockzoeker/` |
+| `index.html` | De app. Het configuratieblok staat bovenaan. | GitHub Pages, repository `stockzoeker` |
+| `zoeklogic.js` | Zoeken, sorteren, groeperen. Staat apart zodat de tests exact deze code testen. | GitHub Pages, repository `stockzoeker` |
+| `sw.js` | Bewaart de app op het toestel, zodat ze ook zonder wifi start. | GitHub Pages, repository `stockzoeker` |
+| `manifest.webmanifest`, `icon-192.png`, `icon-512.png` | Nodig om de app op het startscherm te zetten. | GitHub Pages, repository `stockzoeker` |
 | `apps-script/Code.gs` | Leest de stocklijst uit de Sheet. | In de **stock-Sheet** (Apps Script) |
 | `tests/` | Geautomatiseerde tests. | Optioneel |
 
@@ -55,11 +55,17 @@ Pas je `Code.gs` later aan, kies dan **Implementeren > Implementaties beheren > 
 
 ### Stap 2: publiceren op GitHub Pages
 
-De app komt in een **map `stockzoeker`** in dezelfde repository als Palletscan. Ze krijgt dan het adres `https://<gebruikersnaam>.github.io/palletscan/stockzoeker/`. Een aparte repository mag ook; dan is het `https://<gebruikersnaam>.github.io/stockzoeker/`.
+Elke app krijgt een eigen repository onder hetzelfde account, zoals Palletscan en QC Rondgang (`lventureapps/qcrondgang`). Stockzoeker wordt `lventureapps/stockzoeker`, adres `https://lventureapps.github.io/stockzoeker/`.
 
-1. Open de repository op github.com en kies **Add file > Upload files**.
-2. Sleep de **map** `stockzoeker` erin (met `index.html`, `zoeklogic.js`, `sw.js`, `manifest.webmanifest`, de twee iconen en desgewenst `tests`). GitHub behoudt de mapnaam. Lukt slepen van een map niet, maak dan eerst een bestand aan met als naam `stockzoeker/index.html` en upload de rest in die map.
-3. Klik op **Commit changes**. Na ongeveer een minuut staat de app online.
+1. Maak op github.com een nieuwe repository `stockzoeker`, zichtbaarheid **Public**.
+2. Kies **uploading an existing file** en sleep de **inhoud** van de map `stockzoeker` erin: `index.html`, `zoeklogic.js`, `sw.js`, `manifest.webmanifest`, `icon-192.png`, `icon-512.png`, en desgewenst de map `tests`. De bestanden komen dus in de root van de repository, niet in een submap.
+3. Klik op **Commit changes**.
+4. Ga naar **Settings > Pages**. Bij Source **Deploy from a branch**, branch **main**, map **/ (root)**, **Save**.
+5. Na ongeveer een minuut staat de app op `https://lventureapps.github.io/stockzoeker/`. Je moet het zwarte ZOEK-scherm zien.
+
+Het kan ook als map `stockzoeker/` in de Palletscan-repository (adres `…/palletscan/stockzoeker/`); de app werkt op beide manieren. Zet de bestanden nooit los in de hoofdmap van een andere app: dan overschrijf je haar `index.html` en `sw.js`.
+
+Alle repositories onder `lventureapps.github.io` delen op het toestel dezelfde browseropslag. Daarom gebruikt Stockzoeker eigen namen voor alles wat ze bewaart (`stockzoeker.settings`, `stockzoeker.data`, cache `stockzoeker-v1`) en ruimt haar service worker alleen caches op die met `stockzoeker-` beginnen. Een nieuwe app op hetzelfde adres moet dat ook doen.
 
 Laat `READ_KEY` en `ENDPOINT_URL` in `index.html` leeg zolang de repository publiek is; vul ze per toestel in (stap 3). Zet `Code.gs` met je echte sleutel niet in de repository.
 
@@ -83,7 +89,7 @@ Dezelfde als voor Palletscan (Transmission type = KeyEvent, Terminator = Enter).
 
 ## De Sheet
 
-Het script leest het tabblad **Stock nazicht_Nieuw** en zoekt in rij 1, **vanaf kolom V**, deze kopjes:
+Het script leest het tabblad **Stock nazicht_Nieuw**. In rij 1 zoekt het deze kopjes, **vanaf kolom V** tenzij anders vermeld:
 
 | Kopje in de Sheet | In de app |
 |---|---|
@@ -94,8 +100,10 @@ Het script leest het tabblad **Stock nazicht_Nieuw** en zoekt in rij 1, **vanaf 
 | `Aantal stuks op pallet` | aantal in stuks |
 | `Datum opmeting` | "opgemeten …" |
 | `Locatie` | plaats |
+| `Magazijn` | staat hier `TEE`, dan toont de app **TEE** als plaats in plaats van de rekplaats (instelbaar: `MAGAZIJN_AS_LOCATION` in `index.html`) |
+| `Status` (kolom C, gezocht vanaf kolom A) | staat hier `Nieuw`, dan krijgt de regel het label **NIEUW**, en is de pallet vindbaar met het woord `nieuw` |
 
-De kolommen worden op hun **kopje** gevonden, niet op hun letter. Een kolom tussenvoegen of verplaatsen breekt dus niets; een kopje hernoemen wel (pas dan `HEADERS` in `Code.gs` aan). `KLANT`, `PRODUCT NAME` en `Pal NR` staan ook in de kolommen A tot D; die worden overgeslagen omdat het zoeken pas vanaf kolom V begint (`FIRST_COL`). De kolom **Magazijn** wordt niet gebruikt.
+De kolommen worden op hun **kopje** gevonden, niet op hun letter. Een kolom tussenvoegen of verplaatsen breekt dus niets; een kopje hernoemen wel (pas dan `HEADERS` in `Code.gs` aan). `KLANT`, `PRODUCT NAME` en `Pal NR` staan ook in de kolommen A tot D; die worden overgeslagen omdat het zoeken pas vanaf kolom V begint (`FIRST_COL`). Alleen `Status` wordt vanaf kolom A gezocht, omdat dat kopje enkel in kolom C staat. Kolommen A–D en V–AC beschrijven op elke rij dezelfde pallet (nagekeken op de volledige lijst: klant en Pal NR zijn per rij gelijk), dus Status hoort bij de juiste pallet.
 
 Het script stuurt de **weergavewaarden** door: wat jij in de Sheet ziet ("7.160 m", "29-8-2026"), niet de ruwe getallen. `#N/A` en lege cellen worden op het scherm "–". Een lege locatie wordt "Geen locatie". Regels waar klant, product en palletnummer alle drie leeg zijn, worden overgeslagen.
 
@@ -112,12 +120,14 @@ Een pallet verdwijnt uit de app zodra haar regels uit de Sheet verdwijnen. Zolan
 7. **Toegang**: de web-app staat op "Iedereen" en is beveiligd met de leessleutel. Wie de sleutel kent kan de stocklijst lezen, niets schrijven. Een geweigerde sleutel stopt het automatisch verversen tot de instellingen aangepast zijn.
 8. **Geen 4G nodig.** De app zoekt lokaal; verbinding is alleen nodig om te verversen.
 9. **Meer dan 300 treffers** worden afgekapt met de melding "Typ meer letters".
+11. **Magazijn als plaats**: alleen `TEE` (instelbaar). Voor `SSCC Extern` en `V-Depot` blijft de kolom Locatie gelden, meestal "Geen locatie". Wil je die ook als plaats tonen, voeg ze toe aan `MAGAZIJN_AS_LOCATION`.
+12. **Het woord `nieuw`** in een zoekopdracht vindt ook de pallets met status Nieuw, naast klanten of producten met "nieuw" in de naam.
 10. **Opslag**: de lijst staat in de browseropslag van Chrome (localStorage). Browsegegevens wissen haalt ze weg; de app haalt ze bij de volgende verbinding gewoon opnieuw op. Er gaat niets verloren, want de app schrijft niets.
 
 ## De app aanpassen
 
 1. Pas `index.html` aan en verhoog `APP_VERSION` in het configuratieblok.
-2. Upload het bestand opnieuw naar GitHub, in de map `stockzoeker`.
+2. Upload het bestand opnieuw naar de repository `stockzoeker`.
 3. Op elk toestel: open de app met wifi, wacht tien seconden, sluit ze en open ze opnieuw. De nieuwe versie is actief vanaf de tweede start. Het versienummer staat linksonder.
 
 ## Tests
@@ -125,15 +135,21 @@ Een pallet verdwijnt uit de app zodra haar regels uit de Sheet verdwijnen. Zolan
 Met Node.js:
 
 ```
-node tests/run.js              # zoeklogica (29 tests)
-node tests/run-appsscript.js   # Code.gs tegen een nagebootste Sheet (14 tests)
+node tests/run.js              # zoeklogica (32 tests)
+node tests/run-appsscript.js   # Code.gs tegen een nagebootste Sheet (16 tests)
 ```
 
-Zonder Node.js: upload de map `tests` mee en open `…/stockzoeker/tests/`; die pagina draait de tests van `run.js` in de browser.
+Zonder Node.js: upload de map `tests` mee en open `https://lventureapps.github.io/stockzoeker/tests/`; die pagina draait de tests van `run.js` in de browser.
 
 Daarnaast is de app getest in een geautomatiseerde browser (Chromium, 480 × 800 zoals de BT-A600) met de echte stocklijst van 823 regels: instellen, ophalen, zoeken op naam, meerdere woorden, palletcode met en zonder voorloopnul, een gescande SSCC, het randgeval met cijfers in een naam, offline herladen en zoeken, vanzelf verversen zodra de verbinding terug is, en een geweigerde sleutel. Niet getest, omdat het alleen ter plaatse kan: het echte Apps Script in de echte Sheet, en de Keyence zelf.
 
 ## Wijzigingen
+
+### Versie 1.1.0
+
+- Staat een pallet in magazijn **TEE** (kolom Magazijn), dan toont de app TEE als plaats in plaats van de rekplaats. Instelbaar met `MAGAZIJN_AS_LOCATION`.
+- Pallets met **status Nieuw** (kolom C) krijgen het label NIEUW bij hun eigenschappen en zijn vindbaar met het woord `nieuw`.
+- `Code.gs` stuurt nu ook de kolommen Magazijn en Status door. **Code.gs opnieuw implementeren** (Implementaties beheren > Nieuwe versie); een oude app met een nieuw script werkt, een nieuwe app met een oud script toont geen TEE en geen NIEUW.
 
 ### Versie 1.0.1
 

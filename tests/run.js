@@ -17,7 +17,7 @@
   }
 
   // Een kleine stocklijst zoals het Apps Script ze teruggeeft:
-  // [klant, product, palnr, meters, stuks, datum, locatie]
+  // [klant, product, palnr, meters, stuks, datum, locatie, magazijn, status]
   var RAW = [
     ['Zusto ', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733 ', '29-8-2026', 'C15'],
     ['Zusto ', 'Zusto UK', '482', '3.865 m', '25.765 ', '29-5-2026', 'Geen locatie'],
@@ -30,7 +30,10 @@
     ['Nutri-Dynamics ', "FO 60mm g'woon energy gel citroen 40g", '', '1.760 m', '29.333 ', '21-10-2026', ''],
     ['Umami', 'Stickpack 2500 bio', '2500', '', '1.000 ', '1-10-2026', 'Uitgenomen'],
     ['', '', '', '', '', '', ''],
-    ['Akina', 'Délices du jour', '12', '10 m', '', '3-10-2026', 'Gang 1']
+    ['Akina', 'Délices du jour', '12', '10 m', '', '3-10-2026', 'Gang 1'],
+    ['Zusto ', 'Zusto Korea', '1275', '8.442 m', '56.278 ', '20-10-2026', 'Geen locatie', 'TEE', 'Gemeten'],
+    ['Akina', 'FO 162mm Botercake Mix 400ge', '934', '', '', '21-10-2026', 'C32', 'DEVE', 'Nieuw'],
+    ['Akina', 'FO 55mm Alka Greens', '1184', '', '', '21-10-2026', 'Geen locatie', 'DEVE', 'nieuw']
   ];
   var ROWS = L.prepare(RAW);
 
@@ -78,7 +81,7 @@
 
   /* ---------- prepare ---------- */
   t('prepare: lege rijen vallen weg, klant leeg wordt ?, locatie leeg wordt Geen locatie', function () {
-    eq(ROWS.length, 11);
+    eq(ROWS.length, 14);
     var poco = ROWS.filter(function (r) { return r.klant === 'Poco'; })[0];
     eq(poco.pal, null); eq(poco.locatie, 'Geen locatie');
   });
@@ -88,6 +91,24 @@
   });
   t('prepare: spaties rond klant en product weg', function () {
     eq(ROWS[0].klant, 'Zusto'); eq(ROWS[0].stuks, '47.733');
+  });
+
+  t('prepare: magazijn TEE wordt de plaats, andere magazijnen niet', function () {
+    var korea = ROWS.filter(function (r) { return r.product === 'Zusto Korea'; })[0];
+    eq(korea.locatie, 'TEE'); eq(korea.magazijn, 'TEE'); eq(L.locRank(korea.locatie), 1);
+    var cake = ROWS.filter(function (r) { return r.product === 'FO 162mm Botercake Mix 400ge'; })[0];
+    eq(cake.locatie, 'C32');
+    var alt = L.prepare(RAW, { magazijnAsLocation: ['TEE', 'DEVE'] });
+    eq(alt.filter(function (r) { return r.product === 'FO 162mm Botercake Mix 400ge'; })[0].locatie, 'DEVE');
+  });
+  t('prepare: status Nieuw (ook kleine letters) geeft isNew; rijen zonder status niet', function () {
+    eq(ROWS.filter(function (r) { return r.isNew; }).map(function (r) { return r.product; }), ['FO 162mm Botercake Mix 400ge', 'FO 55mm Alka Greens']);
+    eq(ROWS[0].isNew, false); eq(ROWS[0].status, ''); eq(ROWS[0].magazijn, '');
+  });
+  t('search: "nieuw" vindt de nieuwe pallets, ook samen met een klant', function () {
+    eq(L.search(ROWS, 'nieuw').text.length, 2);
+    eq(L.search(ROWS, 'akina nieuw').text.length, 2);
+    eq(L.search(ROWS, 'zusto nieuw').text.length, 0);
   });
 
   /* ---------- search ---------- */
@@ -144,6 +165,8 @@
     eq(names[names.length - 1], '?');
     var cofeo = g.filter(function (x) { return x.key === 'cofeo'; })[0];
     eq(cofeo.rows.length, 2);
+    var akina = g.filter(function (x) { return x.key === 'akina'; })[0];
+    eq(akina.rows.map(function (r) { return r.locatie; }), ['C32', 'Gang 1', 'Geen locatie']); // rek, bestemming, geen
   });
 
   /* ---------- hoeveelheid ---------- */

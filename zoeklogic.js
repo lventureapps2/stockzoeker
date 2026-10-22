@@ -64,14 +64,23 @@
 
   /* ------------------------------------------------------------------
      Rijen uit de Sheet klaarmaken voor het zoeken.
-     Invoer: [klant, product, palnr, meters, stuks, datum, locatie] per rij.
+     Invoer per rij: [klant, product, palnr, meters, stuks, datum, locatie, magazijn, status]
+     (de laatste twee mogen ontbreken: oudere export).
      ------------------------------------------------------------------ */
-  function prepare(rows) {
+  function prepare(rows, opts) {
+    opts = opts || {};
+    // Magazijnen die zelf de plaats zijn: staat de pallet daar, dan toont de app
+    // de naam van het magazijn in plaats van de rekplaats (bv. TEE).
+    var asLoc = {};
+    (opts.magazijnAsLocation || ['TEE']).forEach(function (m) { asLoc[fold(m)] = String(m); });
     var out = [];
     (rows || []).forEach(function (r, i) {
       if (!Array.isArray(r)) return;
       var klant = clean(r[0]), product = clean(r[1]);
       if (!klant && !product && !clean(r[2])) return;
+      var magazijn = clean(r[7]), status = clean(r[8]);
+      var isNew = fold(status) === 'nieuw';
+      var locatie = asLoc[fold(magazijn)] || cleanLoc(r[6]);
       out.push({
         i: i,
         klant: klant || '?',
@@ -80,8 +89,13 @@
         meters: cleanQty(r[3]),
         stuks: cleanQty(r[4]),
         datum: clean(r[5]),
-        locatie: cleanLoc(r[6]),
-        _s: fold(klant + ' ' + product)
+        locatie: locatie,
+        magazijn: magazijn,
+        status: status,
+        isNew: isNew,
+        // Zoektekst: klant en product, plus het woord "nieuw" voor nieuwe pallets
+        // ("zusto nieuw" = de nieuwe pallets van Zusto).
+        _s: fold(klant + ' ' + product + (isNew ? ' nieuw' : ''))
       });
     });
     return out;

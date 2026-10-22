@@ -12,21 +12,25 @@
 /* ======================= CONFIGURATIE ======================= */
 var READ_KEY   = 'VERVANG-DIT-DOOR-EEN-EIGEN-LEESSLEUTEL'; // dezelfde sleutel als in de app (⚙). Niet de sleutel van Palletscan.
 var SHEET_NAME = 'Stock nazicht_Nieuw';
-var FIRST_COL  = 22;   // kolom V: vanaf hier worden de kopjes gezocht (KLANT, PRODUCT NAME en Pal NR staan ook in A-D, die mogen niet meetellen)
+var FIRST_COL  = 22;   // kolom V: vanaf hier worden de meeste kopjes gezocht (KLANT, PRODUCT NAME en Pal NR staan ook in A-D, die mogen niet meetellen)
 var HEADER_ROW = 1;
 // De kolommen worden op hun kopje gevonden, niet op hun letter. Een kolom
 // tussenvoegen in de Sheet breekt dus niets, een kopje hernoemen wel: pas het
 // dan ook hier aan. Vergelijking is hoofdletterongevoelig, spaties tellen niet.
+// "from" = vanaf welke kolom het kopje gezocht wordt (standaard FIRST_COL).
+// Status staat in kolom C, op dezelfde rij als de pallet in V-AC.
 var HEADERS = {
-  klant:   'KLANT',
-  product: 'PRODUCT NAME',
-  pal:     'Pal NR',
-  meters:  'Meters op pallet',
-  stuks:   'Aantal stuks op pallet',
-  datum:   'Datum opmeting',
-  locatie: 'Locatie'
+  klant:    { text: 'KLANT' },
+  product:  { text: 'PRODUCT NAME' },
+  pal:      { text: 'Pal NR' },
+  meters:   { text: 'Meters op pallet' },
+  stuks:    { text: 'Aantal stuks op pallet' },
+  datum:    { text: 'Datum opmeting' },
+  locatie:  { text: 'Locatie' },
+  magazijn: { text: 'Magazijn' },
+  status:   { text: 'Status', from: 1 }
 };
-var ORDER = ['klant', 'product', 'pal', 'meters', 'stuks', 'datum', 'locatie']; // volgorde in elke rij van het antwoord; de app rekent hierop
+var ORDER = ['klant', 'product', 'pal', 'meters', 'stuks', 'datum', 'locatie', 'magazijn', 'status']; // volgorde in elke rij van het antwoord; de app rekent hierop
 /* ============================================================ */
 
 /** De app stuurt hierheen: { key, action: "stock" } of { key, ping: true } */
@@ -63,15 +67,15 @@ function readStock_() {
   var lastCol = sheet.getLastColumn(), lastRow = sheet.getLastRow();
   if (lastCol < FIRST_COL || lastRow < HEADER_ROW) return { ok: false, error: 'badheader', detail: 'Tabblad is leeg' };
 
-  // Kopjes zoeken vanaf kolom V.
-  var heads = sheet.getRange(HEADER_ROW, FIRST_COL, 1, lastCol - FIRST_COL + 1).getDisplayValues()[0];
+  // Kopjes zoeken: elk vanaf zijn eigen startkolom (meestal V).
+  var heads = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getDisplayValues()[0];
   var col = {}, missing = [];
   ORDER.forEach(function (k) {
-    var want = norm_(HEADERS[k]), found = -1;
-    for (var i = 0; i < heads.length && found < 0; i++) if (norm_(heads[i]) === want) found = FIRST_COL + i;
-    if (found < 0) missing.push(HEADERS[k]); else col[k] = found;
+    var h = HEADERS[k], from = h.from || FIRST_COL, want = norm_(h.text), found = -1;
+    for (var i = from - 1; i < heads.length && found < 0; i++) if (norm_(heads[i]) === want) found = i + 1;
+    if (found < 0) missing.push(h.text + ' (vanaf kolom ' + colLetter_(from) + ')'); else col[k] = found;
   });
-  if (missing.length) return { ok: false, error: 'badheader', detail: 'Kopje(s) niet gevonden vanaf kolom ' + colLetter_(FIRST_COL) + ': ' + missing.join(', ') };
+  if (missing.length) return { ok: false, error: 'badheader', detail: 'Kopje(s) niet gevonden: ' + missing.join(', ') };
 
   var rows = [];
   if (lastRow > HEADER_ROW) {

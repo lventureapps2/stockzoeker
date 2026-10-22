@@ -66,7 +66,7 @@ function row(a, b, c, d, v, w, x, y, z, aa, ab, ac) {
 }
 var GRID = [HEAD,
   row('Zusto', 'Zusto UK', 'Gemeten', '482', 'Zusto ', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733 ', '29-8-2026', 'DEVE', 'C15'),
-  row('?', 'x', '', '1', '?', ' fo 12pet blauw 410', '1134', '#N/A', '', '1-10-2026', 'DEVE', 'C46'),
+  row('?', 'x', 'Nieuw', '1', '?', ' fo 12pet blauw 410', '1134', '#N/A', '', '1-10-2026', 'DEVE', 'C46'),
   row('', '', '', '', '', '', '', '', '', '', '', ''),                                             // lege regel
   row('Poco', 'y', '', '2', 'Poco', 'KA-TESCO SPICES C', '0', '', '', '21-10-2026', 'SSCC Extern', ''),
   row('', '', '', '', 'Zusto ', 'Zusto USA', '482', '5.241 m', '34.937 ', '29-5-2026', 'TEE', 'Geen locatie')
@@ -97,14 +97,14 @@ t('stock: kolommen V-AC op kopje gevonden, niet die van A-D', function () {
   var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', GRID) }), 'k');
   var out = post(env, { key: 'k', action: 'stock' });
   eq(out.ok, true);
-  eq(out.columns, ['klant', 'product', 'pal', 'meters', 'stuks', 'datum', 'locatie']);
-  eq(out.rows[0], ['Zusto', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733', '29-8-2026', 'C15']);
+  eq(out.columns, ['klant', 'product', 'pal', 'meters', 'stuks', 'datum', 'locatie', 'magazijn', 'status']);
+  eq(out.rows[0], ['Zusto', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733', '29-8-2026', 'C15', 'DEVE', 'Gemeten']);
 });
 t('stock: lege regel valt weg, regel zonder kolom A-D blijft', function () {
   var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', GRID) }), 'k');
   var out = post(env, { key: 'k', action: 'stock' });
   eq(out.rows.length, 4);
-  eq(out.rows[3], ['Zusto', 'Zusto USA', '482', '5.241 m', '34.937', '29-5-2026', 'Geen locatie']);
+  eq(out.rows[3], ['Zusto', 'Zusto USA', '482', '5.241 m', '34.937', '29-5-2026', 'Geen locatie', 'TEE', '']);
 });
 t('stock: #N/A en lege locatie komen ongewijzigd door (de app zet ze om)', function () {
   var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', GRID) }), 'k');
@@ -133,7 +133,22 @@ t('kolom tussengevoegd: nog altijd juist', function () {
   var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', grid) }), 'k');
   var out = post(env, { key: 'k', action: 'stock' });
   eq(out.ok, true);
-  eq(out.rows[0], ['Zusto', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733', '29-8-2026', 'C15']);
+  eq(out.rows[0], ['Zusto', 'FO 150mm Gourmet INT', '906', '7.160 m', '47.733', '29-8-2026', 'C15', 'DEVE', 'Gemeten']);
+});
+t('Status komt uit kolom C, niet uit een kopje "Status" verderop', function () {
+  var grid = GRID.map(function (r) { return r.slice(); });
+  grid[0].push('Status'); grid[1].push('Later');
+  var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', grid) }), 'k');
+  var out = post(env, { key: 'k', action: 'stock' });
+  eq(out.rows[0][8], 'Gemeten');
+});
+t('Status ontbreekt: badheader noemt kolom A', function () {
+  var grid = GRID.map(function (r) { return r.slice(); });
+  grid[0][2] = 'Toestand';
+  var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', grid) }), 'k');
+  var out = post(env, { key: 'k', action: 'stock' });
+  eq(out.error, 'badheader');
+  if (out.detail.indexOf('Status (vanaf kolom A)') < 0) throw new Error(out.detail);
 });
 t('doGet toont alleen een tekst, geen stock', function () {
   var env = load(makeEnv({ 'Stock nazicht_Nieuw': makeSheet('Stock nazicht_Nieuw', GRID) }), 'k');
